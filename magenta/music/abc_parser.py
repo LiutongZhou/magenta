@@ -23,8 +23,6 @@ from __future__ import print_function
 from fractions import Fraction
 import re
 
-# internal imports
-
 import six
 from six.moves import range  # pylint: disable=redefined-builtin
 import tensorflow as tf
@@ -743,9 +741,9 @@ class ABCTune(object):
 
     # "Minor" and "Aeolian" are special cases that are abbreviated to 'm'.
     # "Major" and "Ionian" are special cases that are abbreviated to ''.
-    if mode == 'min' or mode == 'aeo':
+    if mode in ('min', 'aeo'):
       mode = 'm'
-    elif mode == 'maj' or mode == 'ion':
+    elif mode in ('maj', 'ion'):
       mode = ''
 
     sig = ABCTune.KEY_TO_SIG[''.join(key_components[0:2] + [mode]).lower()]

@@ -23,8 +23,6 @@ import os
 import re
 import time
 
-# internal imports
-
 import numpy as np
 import scipy
 import tensorflow as tf
@@ -36,6 +34,7 @@ from magenta.models.onsets_frames_transcription import data
 from magenta.models.onsets_frames_transcription import infer_util
 from magenta.models.onsets_frames_transcription import model
 from magenta.music import midi_io
+from magenta.music import sequences_lib
 
 
 FLAGS = tf.app.flags.FLAGS
@@ -115,6 +114,8 @@ def model_inference(acoustic_checkpoint, hparams, examples_path, run_dir):
         'acoustic/onsets/onset_probs_flat:0')
     frame_probs_flat = tf.get_default_graph().get_tensor_by_name(
         'acoustic/frame_probs_flat:0')
+    velocity_values_flat = tf.get_default_graph().get_tensor_by_name(
+        'acoustic/velocity/velocity_values_flat:0')
 
     # Define some metrics.
     (metrics_to_updates,
@@ -150,13 +151,14 @@ def model_inference(acoustic_checkpoint, hparams, examples_path, run_dir):
       num_frames = []
       for unused_i in range(acoustic_data_provider.num_batches):
         start_time = time.time()
-        labels, filenames, note_sequences, logits, onset_logits = sess.run([
-            data_labels,
-            acoustic_data_provider.filenames,
-            acoustic_data_provider.note_sequences,
-            frame_probs_flat,
-            onset_probs_flat,
-        ])
+        (labels, filenames, note_sequences, logits, onset_logits,
+         velocity_values) = sess.run([
+             data_labels,
+             acoustic_data_provider.filenames,
+             acoustic_data_provider.note_sequences,
+             frame_probs_flat,
+             onset_probs_flat,
+             velocity_values_flat])
         # We expect these all to be length 1 because batch size is 1.
         assert len(filenames) == len(note_sequences) == 1
         # These should be the same length and have been flattened.
@@ -168,11 +170,12 @@ def model_inference(acoustic_checkpoint, hparams, examples_path, run_dir):
         else:
           onset_predictions = None
 
-        sequence_prediction = infer_util.pianoroll_to_note_sequence(
+        sequence_prediction = sequences_lib.pianoroll_to_note_sequence(
             frame_predictions,
             frames_per_second=data.hparams_frames_per_second(hparams),
             min_duration_ms=FLAGS.min_note_duration_ms,
-            onset_predictions=onset_predictions)
+            onset_predictions=onset_predictions,
+            velocity_values=velocity_values)
 
         end_time = time.time()
         infer_time = end_time - start_time
@@ -216,7 +219,7 @@ def model_inference(acoustic_checkpoint, hparams, examples_path, run_dir):
             run_dir, filename + '_label_from_frames.mid')
         tf.logging.info('Writing label from frames midi file to %s',
                         label_from_frames_output_file)
-        sequence_label_from_frames = infer_util.pianoroll_to_note_sequence(
+        sequence_label_from_frames = sequences_lib.pianoroll_to_note_sequence(
             labels,
             frames_per_second=data.hparams_frames_per_second(hparams),
             min_duration_ms=FLAGS.min_note_duration_ms)

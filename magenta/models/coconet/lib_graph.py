@@ -4,7 +4,6 @@ from __future__ import division
 from __future__ import print_function
 from collections import OrderedDict
 import os
-# internal imports
 import tensorflow as tf
 from magenta.models.coconet import lib_hparams
 from magenta.models.coconet import lib_tfutil
@@ -13,28 +12,60 @@ from magenta.models.coconet import lib_tfutil
 class CoconetGraph(object):
   """Model for predicting autofills given context."""
 
-  def __init__(self, is_training, hparams, placeholders):
+  def __init__(self,
+               is_training,
+               hparams,
+               placeholders=None,
+               direct_inputs=None,
+               use_placeholders=True):
     self.hparams = hparams
     self.batch_size = hparams.batch_size
     self.num_pitches = hparams.num_pitches
     self.num_instruments = hparams.num_instruments
     self.is_training = is_training
     self.placeholders = placeholders
+    self._direct_inputs = direct_inputs
+    self._use_placeholders = use_placeholders
     self.hiddens = []
     self.popstats_by_batchstat = OrderedDict()
     self.build()
 
   @property
+  def use_placeholders(self):
+    return self._use_placeholders
+
+  @use_placeholders.setter
+  def use_placeholders(self, use_placeholders):
+    self._use_placeholders = use_placeholders
+
+  @property
+  def inputs(self):
+    if self.use_placeholders:
+      return self.placeholders
+    else:
+      return self.direct_inputs
+
+  @property
+  def direct_inputs(self):
+    return self._direct_inputs
+
+  @direct_inputs.setter
+  def direct_inputs(self, direct_inputs):
+    if set(direct_inputs.keys()) != set(self.placeholders.keys()):
+      raise AttributeError('Need to have pianorolls, masks, lengths.')
+    self._direct_inputs = direct_inputs
+
+  @property
   def pianorolls(self):
-    return self.placeholders['pianorolls']
+    return self.inputs['pianorolls']
 
   @property
   def masks(self):
-    return self.placeholders['masks']
+    return self.inputs['masks']
 
   @property
   def lengths(self):
-    return self.placeholders['lengths']
+    return self.inputs['lengths']
 
   def build(self):
     """Builds the graph."""
@@ -48,7 +79,7 @@ class CoconetGraph(object):
         self.residual_counter += 1
         self.residual_save(featuremaps)
 
-        featuremaps = self.apply_convolution(featuremaps, layer)
+        featuremaps = self.apply_convolution(featuremaps, layer, i)
         featuremaps = self.apply_residual(
             featuremaps, is_first=i == 0, is_last=i == n - 1)
         featuremaps = self.apply_activation(featuremaps, layer)
@@ -64,41 +95,41 @@ class CoconetGraph(object):
     self.compute_loss(self.cross_entropy)
     self.setup_optimizer()
 
+    for var in tf.trainable_variables():
+      tf.logging.info('%s_%r', var.name, var.get_shape().as_list())
+
   def get_convnet_input(self):
     """Returns concatenates masked out pianorolls with their masks."""
-    pianorolls, masks = self.placeholders['pianorolls'], self.placeholders[
-        'masks']
-    pianorolls *= 1 - masks
+    # pianorolls, masks = self.inputs['pianorolls'], self.inputs[
+    #     'masks']
+    pianorolls, masks = self.pianorolls, self.masks
+    pianorolls *= 1. - masks
     if self.hparams.mask_indicates_context:
       # flip meaning of mask for convnet purposes: after flipping, mask is hot
       # where values are known. this makes more sense in light of padding done
       # by convolution operations: the padded area will have zero mask,
       # indicating no information to rely on.
-      masks = 1 - masks
+      masks = 1. - masks
     return tf.concat([pianorolls, masks], axis=3)
 
   def setup_optimizer(self):
     """Instantiates learning rate, decay op and train_op among others."""
+    # If not training, don't need to add optimizer to the graph.
+    if not self.is_training:
+      self.train_op = tf.no_op()
+      self.learning_rate = tf.no_op()
+      return
+
     self.learning_rate = tf.Variable(
         self.hparams.learning_rate,
         name='learning_rate',
         trainable=False,
         dtype=tf.float32)
 
-    # If not training, don't need to add optimizer to the graph.
-    if not self.is_training:
-      self.train_op = tf.no_op
-      return
-
     # FIXME 0.5 -> hparams.decay_rate
     self.decay_op = tf.assign(self.learning_rate, 0.5 * self.learning_rate)
     self.optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate)
     self.train_op = self.optimizer.minimize(self.loss)
-    self.gradient_norms = [
-        tf.sqrt(tf.reduce_sum(gradient[0]**2))
-        for gradient in self.optimizer.compute_gradients(
-            self.loss, var_list=tf.trainable_variables())
-    ]
 
   def compute_predictions(self, logits):
     return (tf.nn.softmax(logits, dim=2)
@@ -124,7 +155,7 @@ class CoconetGraph(object):
 
     # construct mask and its complement, respecting pad mask
     mask = pad_mask * self.masks
-    unmask = pad_mask * (1 - self.masks)
+    unmask = pad_mask * (1. - self.masks)
 
     # Compute numbers of variables
     # #timesteps * #variables per timestep
@@ -198,7 +229,7 @@ class CoconetGraph(object):
         x += self.output_for_residual
     return x
 
-  def apply_convolution(self, x, layer):
+  def apply_convolution(self, x, layer, layer_idx):
     """Adds convolution and batch norm layers if hparam.batch_norm is True."""
     if 'filters' not in layer:
       return x
@@ -207,16 +238,50 @@ class CoconetGraph(object):
     # Instantiate or retrieve filter weights.
     fanin = tf.to_float(tf.reduce_prod(filter_shape[:-1]))
     stddev = tf.sqrt(tf.div(2.0, fanin))
-    weights = tf.get_variable(
-        'weights',
-        filter_shape,
-        initializer=tf.random_normal_initializer(0.0, stddev))
-    stride = layer.get('conv_stride', 1)
-    conv = tf.nn.conv2d(
-        x,
-        weights,
-        strides=[1, stride, stride, 1],
-        padding=layer.get('conv_pad', 'SAME'))
+    initializer = tf.random_normal_initializer(
+        0.0, stddev)
+    regular_convs = (not self.hparams.use_sep_conv or
+                     layer_idx < self.hparams.num_initial_regular_conv_layers)
+    if regular_convs:
+      dilation_rates = layer.get('dilation_rate', 1)
+      if isinstance(dilation_rates, int):
+        dilation_rates = [dilation_rates] * 2
+      weights = tf.get_variable(
+          'weights',
+          filter_shape,
+          initializer=initializer if self.is_training else None)
+      stride = layer.get('conv_stride', 1)
+      conv = tf.nn.conv2d(
+          x,
+          weights,
+          strides=[1, stride, stride, 1],
+          padding=layer.get('conv_pad', 'SAME'),
+          dilations=[1] + dilation_rates + [1])
+    else:
+      num_outputs = filter_shape[-1]
+      num_splits = layer.get('num_pointwise_splits', 1)
+      tf.logging.info('num_splits %d', num_splits)
+      if num_splits > 1:
+        num_outputs = None
+      conv = tf.contrib.layers.separable_conv2d(
+          x,
+          num_outputs,
+          filter_shape[:2],
+          depth_multiplier=self.hparams.sep_conv_depth_multiplier,
+          stride=layer.get('conv_stride', 1),
+          padding=layer.get('conv_pad', 'SAME'),
+          rate=layer.get('dilation_rate', 1),
+          activation_fn=None,
+          weights_initializer=initializer if self.is_training else None)
+      if num_splits > 1:
+        splits = tf.split(conv, num_splits, -1)
+        print(len(splits), splits[0].shape)
+        # TODO(annahuang): support non equal splits.
+        pointwise_splits = [
+            tf.layers.dense(splits[i], filter_shape[3]/num_splits,
+                            name='split_%d_%d' % (layer_idx, i))
+            for i in range(num_splits)]
+        conv = tf.concat((pointwise_splits), axis=-1)
 
     # Compute batch normalization or add biases.
     if self.hparams.batch_norm:
@@ -253,10 +318,10 @@ class CoconetGraph(object):
             tf.GraphKeys.MODEL_VARIABLES, tf.GraphKeys.GLOBAL_VARIABLES
         ],
         initializer=tf.constant_initializer(1.0))
-    batchmean, batchvariance = tf.nn.moments(x, [0, 1, 2], keep_dims=True)
 
     decay = 0.01
     if self.is_training:
+      batchmean, batchvariance = tf.nn.moments(x, [0, 1, 2], keep_dims=True)
       mean, variance = batchmean, batchvariance
       updates = [
           popmean.assign_sub(decay * (popmean - mean)),
@@ -265,12 +330,10 @@ class CoconetGraph(object):
       # make update happen when mean/variance are used
       with tf.control_dependencies(updates):
         mean, variance = tf.identity(mean), tf.identity(variance)
+      self.popstats_by_batchstat[batchmean] = popmean
+      self.popstats_by_batchstat[batchvariance] = popvariance
     else:
       mean, variance = popmean, popvariance
-      mean, variance = batchmean, batchvariance
-
-    self.popstats_by_batchstat[batchmean] = popmean
-    self.popstats_by_batchstat[batchvariance] = popvariance
 
     return tf.nn.batch_normalization(x, mean, variance, betas, gammas,
                                      self.hparams.batch_norm_variance_epsilon)
@@ -301,23 +364,34 @@ def get_placeholders(hparams):
       lengths=tf.placeholder(tf.float32, [None]))
 
 
-def build_graph(is_training, hparams, placeholders=None):
-  if placeholders is None:
+def build_graph(is_training,
+                hparams,
+                placeholders=None,
+                direct_inputs=None,
+                use_placeholders=True):
+  """Builds the model graph."""
+  if placeholders is None and use_placeholders:
     placeholders = get_placeholders(hparams)
   initializer = tf.random_uniform_initializer(-hparams.init_scale,
                                               hparams.init_scale)
   with tf.variable_scope('model', reuse=None, initializer=initializer):
     graph = CoconetGraph(
-        is_training=is_training, hparams=hparams, placeholders=placeholders)
+        is_training=is_training,
+        hparams=hparams,
+        placeholders=placeholders,
+        direct_inputs=direct_inputs,
+        use_placeholders=use_placeholders)
   return graph
 
 
-def load_checkpoint(path):
+def load_checkpoint(path, instantiate_sess=True):
   """Builds graph, loads checkpoint, and returns wrapped model."""
-  print('Loading checkpoint from', path)
+  tf.logging.info('Loading checkpoint from %s', path)
   hparams = lib_hparams.load_hparams(path)
   model = build_graph(is_training=False, hparams=hparams)
   wmodel = lib_tfutil.WrappedModel(model, model.loss.graph, hparams)
+  if not instantiate_sess:
+    return wmodel
   with wmodel.graph.as_default():
     wmodel.sess = tf.Session()
     saver = tf.train.Saver()

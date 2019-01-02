@@ -17,9 +17,11 @@ from __future__ import division
 from __future__ import print_function
 
 import copy
+import os
 import re
+import tarfile
 
-# internal imports
+from backports import tempfile
 import numpy as np
 import tensorflow as tf
 
@@ -68,7 +70,7 @@ class TrainedModel(object):
       self._z_input = (
           tf.placeholder(tf.float32,
                          shape=[batch_size, self._config.hparams.z_size])
-          if self._config.hparams.conditional else None)
+          if self._config.hparams.z_size else None)
       self._c_input = (
           tf.placeholder(
               tf.float32,
@@ -85,14 +87,14 @@ class TrainedModel(object):
           shape=[batch_size] + list(self._config.data_converter.length_shape))
       self._max_length = tf.placeholder(tf.int32, shape=())
       # Outputs
-      self._outputs, _ = model.sample(
+      self._outputs, self._decoder_results = model.sample(
           batch_size,
           max_length=self._max_length,
           z=self._z_input,
           c_input=self._c_input,
           temperature=self._temperature,
           **sample_kwargs)
-      if self._config.hparams.conditional:
+      if self._config.hparams.z_size:
         q_z = model.encode(self._inputs, self._inputs_length, self._controls)
         self._mu = q_z.loc
         self._sigma = q_z.scale.diag
@@ -112,7 +114,20 @@ class TrainedModel(object):
       # Restore graph
       self._sess = tf.Session(target=session_target)
       saver = tf.train.Saver(var_map)
-      saver.restore(self._sess, checkpoint_path)
+      if (os.path.exists(checkpoint_path) and
+          tarfile.is_tarfile(checkpoint_path)):
+        tf.logging.info('Unbundling checkpoint.')
+        with tempfile.TemporaryDirectory() as temp_dir:
+          tar = tarfile.open(checkpoint_path)
+          tar.extractall(temp_dir)
+          # Assume only a single checkpoint is in the directory.
+          for name in tar.getnames():
+            if name.endswith('.index'):
+              checkpoint_path = os.path.join(temp_dir, name[0:-6])
+              break
+          saver.restore(self._sess, checkpoint_path)
+      else:
+        saver.restore(self._sess, checkpoint_path)
 
   def sample(self, n=None, length=None, temperature=1.0, same_z=False,
              c_input=None):
@@ -185,7 +200,7 @@ class TrainedModel(object):
       AssertionError: If `assert_same_length` is True and any extracted
         sequences differ in length.
     """
-    if not self._config.hparams.conditional:
+    if not self._config.hparams.z_size:
       raise RuntimeError('Cannot encode with a non-conditional model.')
 
     inputs = []
@@ -221,7 +236,7 @@ class TrainedModel(object):
     Raises:
        RuntimeError: If called for a non-conditional model.
     """
-    if not self._config.hparams.conditional:
+    if not self._config.hparams.z_size:
       raise RuntimeError('Cannot encode with a non-conditional model.')
 
     n = len(input_tensors)
@@ -229,7 +244,8 @@ class TrainedModel(object):
     batch_size = self._config.hparams.batch_size
 
     batch_pad_amt = -n % batch_size
-    input_tensors += [np.zeros([0, input_depth])] * batch_pad_amt
+    if batch_pad_amt > 0:
+      input_tensors += [np.zeros([0, input_depth])] * batch_pad_amt
     length_array = np.array(lengths, np.int32)
     length_array = np.pad(
         length_array,
@@ -286,7 +302,8 @@ class TrainedModel(object):
     else:
       return self._config.data_converter.to_items(tensors)
 
-  def decode_to_tensors(self, z, length=None, temperature=1.0, c_input=None):
+  def decode_to_tensors(self, z, length=None, temperature=1.0, c_input=None,
+                        return_full_results=False):
     """Decodes a collection of latent vectors into output tensors.
 
     Args:
@@ -295,14 +312,17 @@ class TrainedModel(object):
         if end tokens are not being used.
       temperature: The softmax temperature to use (if applicable).
       c_input: Control sequence (if applicable).
+      return_full_results: If true will return the full decoder_results,
+        otherwise it will return only the samples.
     Returns:
-      Outputs from decoder as a 2D numpy array.
+      If return_full_results is True, will return the full decoder_results list,
+      otherwise it will return the samples from the decoder as a 2D numpy array.
     Raises:
       RuntimeError: If called for a non-conditional model.
       ValueError: If `length` is not specified and an end token is not being
         used.
     """
-    if not self._config.hparams.conditional:
+    if not self._config.hparams.z_size:
       raise RuntimeError('Cannot decode with a non-conditional model.')
 
     if not length and self._config.data_converter.end_token is None:
@@ -324,5 +344,43 @@ class TrainedModel(object):
       }
       if self._c_input is not None:
         feed_dict[self._c_input] = c_input
-      outputs.extend(self._sess.run(self._outputs, feed_dict))
+      if return_full_results:
+        outputs.extend(self._sess.run(self._decoder_results, feed_dict))
+      else:
+        outputs.extend(self._sess.run(self._outputs, feed_dict))
     return outputs[:n]
+
+  def interpolate(self, start_sequence, end_sequence, num_steps,
+                  length=None, temperature=1.0, assert_same_length=True):
+    """Interpolates between a start and an end NoteSequence.
+
+    Args:
+      start_sequence: The NoteSequence to interpolate from.
+      end_sequence: The NoteSequence to interpolate to.
+      num_steps: Number of NoteSequences to be generated, including the
+        reconstructions of the start and end sequences.
+      length: The maximum length of a sample in decoder iterations. Required
+        if end tokens are not being used.
+      temperature: The softmax temperature to use (if applicable).
+      assert_same_length: Whether to raise an AssertionError if all of the
+        extracted sequences are not the same length.
+    Returns:
+      A list of interpolated NoteSequences.
+    Raises:
+      AssertionError: If `assert_same_length` is True and any extracted
+        sequences differ in length.
+    """
+    def _slerp(p0, p1, t):
+      """Spherical linear interpolation."""
+      omega = np.arccos(np.dot(np.squeeze(p0/np.linalg.norm(p0)),
+                               np.squeeze(p1/np.linalg.norm(p1))))
+      so = np.sin(omega)
+      return np.sin((1.0-t)*omega) / so * p0 + np.sin(t*omega)/so * p1
+
+    _, mu, _ = self.encode([start_sequence, end_sequence], assert_same_length)
+    z = np.array([_slerp(mu[0], mu[1], t)
+                  for t in np.linspace(0, 1, num_steps)])
+    return self.decode(
+        length=length,
+        z=z,
+        temperature=temperature)

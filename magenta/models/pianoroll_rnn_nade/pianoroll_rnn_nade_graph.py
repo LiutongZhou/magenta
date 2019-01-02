@@ -15,8 +15,6 @@
 
 import collections
 
-# internal imports
-
 import tensorflow as tf
 
 import magenta
@@ -251,7 +249,7 @@ def get_build_graph_fn(mode, config, sequence_example_file_paths=None):
     """Builds the Tensorflow graph."""
     inputs, lengths = None, None
 
-    if mode == 'train' or mode == 'eval':
+    if mode in ('train', 'eval'):
       inputs, _, lengths = magenta.common.get_padded_batch(
           sequence_example_file_paths, hparams.batch_size, input_size,
           shuffle=mode == 'train')
@@ -263,15 +261,15 @@ def get_build_graph_fn(mode, config, sequence_example_file_paths=None):
     cell = events_rnn_graph.make_rnn_cell(
         hparams.rnn_layer_sizes,
         dropout_keep_prob=hparams.dropout_keep_prob if mode == 'train' else 1.0,
-        attn_length=(
-            hparams.attn_length if hasattr(hparams, 'attn_length') else 0))
+        attn_length=hparams.attn_length,
+        residual_connections=hparams.residual_connections)
 
     rnn_nade = RnnNade(
         cell,
         num_dims=input_size,
         num_hidden=hparams.nade_hidden_units)
 
-    if mode == 'train' or mode == 'eval':
+    if mode in ('train', 'eval'):
       log_probs, cond_probs = rnn_nade.log_prob(inputs, lengths)
 
       inputs_flat = tf.to_float(

@@ -53,6 +53,7 @@ from magenta.music.encoder_decoder import LookbackEventSequenceEncoderDecoder
 from magenta.music.encoder_decoder import MultipleEventSequenceEncoder
 from magenta.music.encoder_decoder import OneHotEncoding
 from magenta.music.encoder_decoder import OneHotEventSequenceEncoderDecoder
+from magenta.music.encoder_decoder import OneHotIndexEventSequenceEncoderDecoder
 from magenta.music.encoder_decoder import OptionalEventSequenceEncoder
 
 from magenta.music.events_lib import NonIntegerStepsPerBarException
@@ -60,16 +61,18 @@ from magenta.music.events_lib import NonIntegerStepsPerBarException
 from magenta.music.lead_sheets_lib import extract_lead_sheet_fragments
 from magenta.music.lead_sheets_lib import LeadSheet
 
-from magenta.music.melodies_lib import BadNoteException
+from magenta.music.melodies_lib import BadNoteError
 from magenta.music.melodies_lib import extract_melodies
 from magenta.music.melodies_lib import Melody
 from magenta.music.melodies_lib import midi_file_to_melody
-from magenta.music.melodies_lib import PolyphonicMelodyException
+from magenta.music.melodies_lib import PolyphonicMelodyError
 
 from magenta.music.melody_encoder_decoder import KeyMelodyEncoderDecoder
 from magenta.music.melody_encoder_decoder import MelodyOneHotEncoding
 
+from magenta.music.midi_io import midi_file_to_note_sequence
 from magenta.music.midi_io import midi_file_to_sequence_proto
+from magenta.music.midi_io import midi_to_note_sequence
 from magenta.music.midi_io import midi_to_sequence_proto
 from magenta.music.midi_io import MIDIConversionError
 from magenta.music.midi_io import sequence_proto_to_midi_file
@@ -90,15 +93,18 @@ from magenta.music.musicxml_reader import MusicXMLConversionError
 from magenta.music.notebook_utils import play_sequence
 from magenta.music.notebook_utils import plot_sequence
 
-from magenta.music.performance_encoder_decoder import NoteDensityOneHotEncoding
+from magenta.music.performance_controls import all_performance_control_signals
+from magenta.music.performance_controls import NoteDensityPerformanceControlSignal
+from magenta.music.performance_controls import PitchHistogramPerformanceControlSignal
+
+from magenta.music.performance_encoder_decoder import ModuloPerformanceEventSequenceEncoderDecoder
+from magenta.music.performance_encoder_decoder import NotePerformanceEventSequenceEncoderDecoder
+from magenta.music.performance_encoder_decoder import PerformanceModuloEncoding
 from magenta.music.performance_encoder_decoder import PerformanceOneHotEncoding
-from magenta.music.performance_encoder_decoder import PitchHistogramEncoder
 
 from magenta.music.performance_lib import extract_performances
 from magenta.music.performance_lib import MetricPerformance
 from magenta.music.performance_lib import Performance
-from magenta.music.performance_lib import performance_note_density_sequence
-from magenta.music.performance_lib import performance_pitch_histogram_sequence
 
 from magenta.music.pianoroll_encoder_decoder import PianorollEncoderDecoder
 

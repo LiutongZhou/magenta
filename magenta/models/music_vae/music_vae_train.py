@@ -19,7 +19,6 @@ from __future__ import print_function
 
 import os
 
-# internal imports
 import tensorflow as tf
 
 from magenta.models.music_vae import configs
@@ -269,7 +268,8 @@ def run(config_map,
     config.hparams.parse(FLAGS.hparams)
   config_update_map = {}
   if FLAGS.examples_path:
-    config_update_map['%s_examples_path' % FLAGS.mode] = FLAGS.examples_path
+    config_update_map['%s_examples_path' % FLAGS.mode] = os.path.expanduser(
+        FLAGS.examples_path)
   config = configs.update_config(config, config_update_map)
   if FLAGS.num_sync_workers:
     config.hparams.batch_size //= FLAGS.num_sync_workers

@@ -1,11 +1,12 @@
-"""Utility for exporting Coconet to SavedModel."""
+"""Command line utility for exporting Coconet to SavedModel."""
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
-# internal imports
 import tensorflow as tf
 
 from magenta.models.coconet import lib_graph
+from magenta.models.coconet import lib_saved_model
+from magenta.models.coconet import lib_tfsampling
 
 
 FLAGS = tf.app.flags.FLAGS
@@ -14,39 +15,21 @@ flags.DEFINE_string('checkpoint', None,
                     'Path to the checkpoint to export.')
 flags.DEFINE_string('destination', None,
                     'Path to export SavedModel.')
+flags.DEFINE_bool('use_tf_sampling', True,
+                  'Whether to export with sampling in a TF while loop.')
 
 
-def export_saved_model(model, destination):
-  """Exports the given model as SavedModel to destination."""
-  if model is None or destination is None or not destination:
-    tf.logging.error('No model or destination provided.')
-    return
-
-  builder = tf.saved_model.builder.SavedModelBuilder(destination)
-
-  signature = tf.saved_model.signature_def_utils.predict_signature_def(
-      inputs={
-          'pianorolls': model.model.pianorolls,
-          'masks': model.model.masks,
-          'lengths': model.model.lengths,
-      }, outputs={
-          'predictions': model.model.predictions
-      })
-
-  signature_def_map = {
-      tf.saved_model.signature_constants.DEFAULT_SERVING_SIGNATURE_DEF_KEY:
-      signature}
-
-  builder.add_meta_graph_and_variables(
-      model.sess,
-      [tf.saved_model.tag_constants.SERVING],
-      signature_def_map=signature_def_map)
-  builder.save()
-
-
-def load_saved_model(sess, path):
-  """Loads the SavedModel at path."""
-  tf.saved_model.loader.load(sess, [tf.saved_model.tag_constants.SERVING], path)
+def export(checkpoint, destination, use_tf_sampling):
+  model = None
+  if use_tf_sampling:
+    model = lib_tfsampling.CoconetSampleGraph(checkpoint)
+    model.instantiate_sess_and_restore_checkpoint()
+  else:
+    model = lib_graph.load_checkpoint(checkpoint)
+  tf.logging.info('Loaded graph.')
+  lib_saved_model.export_saved_model(model, destination,
+                                     [tf.saved_model.tag_constants.SERVING],
+                                     use_tf_sampling)
 
 
 def main(unused_argv):
@@ -56,8 +39,7 @@ def main(unused_argv):
   if FLAGS.destination is None or not FLAGS.destination:
     raise ValueError(
         'Need to provide a destination directory for the SavedModel.')
-  model = lib_graph.load_checkpoint(FLAGS.checkpoint)
-  export_saved_model(model, FLAGS.destination)
+  export(FLAGS.checkpoint, FLAGS.destination, FLAGS.use_tf_sampling)
   tf.logging.info('Exported SavedModel to %s.', FLAGS.destination)
 
 

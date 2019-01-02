@@ -11,22 +11,23 @@ set -e
 checkpoint=$1
 
 # Change this to path for saving samples.
-generation_output_dir="samples"
+generation_output_dir=$HOME/samples
 
 # Generation parameters.
 # Number of samples to generate in a batch.
 gen_batch_size=2
 piece_length=16
 strategy=igibbs
+tfsample=true
 
 # Run command.
-bazel run :coconet_sample \
--- \
+python coconet_sample.py \
 --checkpoint="$checkpoint" \
 --gen_batch_size=$gen_batch_size \
 --piece_length=$piece_length \
 --temperature=0.99 \
 --strategy=$strategy \
+--tfsample=$tfsample \
 --generation_output_dir=$generation_output_dir \
 --logtostderr
 

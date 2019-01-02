@@ -18,8 +18,6 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-# internal imports
-
 from . import constants
 
 import tensorflow as tf
@@ -31,19 +29,21 @@ from magenta.common import tf_utils
 
 def conv_net_kelz(inputs):
   """Builds the ConvNet from Kelz 2016."""
-  with slim.arg_scope(
+  with slim.arg_scope(  # pylint:disable=not-context-manager
       [slim.conv2d, slim.fully_connected],
       activation_fn=tf.nn.relu,
       weights_initializer=tf.contrib.layers.variance_scaling_initializer(
           factor=2.0, mode='FAN_AVG', uniform=True)):
-    net = slim.conv2d(inputs, 32, [3, 3], scope='conv1')
+    net = slim.conv2d(
+        inputs, 48, [3, 3], scope='conv0', normalizer_fn=slim.batch_norm)
 
     net = slim.conv2d(
-        net, 32, [3, 3], scope='conv2', normalizer_fn=slim.batch_norm)
+        net, 48, [3, 3], scope='conv1', normalizer_fn=slim.batch_norm)
     net = slim.max_pool2d(net, [1, 2], stride=[1, 2], scope='pool2')
     net = slim.dropout(net, 0.25, scope='dropout2')
 
-    net = slim.conv2d(net, 64, [3, 3], scope='conv3')
+    net = slim.conv2d(
+        net, 96, [3, 3], scope='conv2', normalizer_fn=slim.batch_norm)
     net = slim.max_pool2d(net, [1, 2], stride=[1, 2], scope='pool3')
     net = slim.dropout(net, 0.25, scope='dropout3')
 
@@ -52,7 +52,7 @@ def conv_net_kelz(inputs):
     net = tf.reshape(net, (dims[0], dims[1],
                            net.shape[2].value * net.shape[3].value), 'flatten4')
 
-    net = slim.fully_connected(net, 512, scope='fc5')
+    net = slim.fully_connected(net, 768, scope='fc_end')
     net = slim.dropout(net, 0.5, scope='dropout5')
 
     return net
@@ -88,6 +88,7 @@ def acoustic_model(inputs, hparams, lstm_units, lengths):
 def get_model(transcription_data, hparams, is_training=True):
   """Builds the acoustic model."""
   onset_labels = transcription_data.onsets
+  velocity_labels = transcription_data.velocities
   frame_labels = transcription_data.labels
   frame_label_weights = transcription_data.label_weights
   lengths = transcription_data.lengths
@@ -98,7 +99,7 @@ def get_model(transcription_data, hparams, is_training=True):
         'If stop_activation_gradient is true, activation_loss must be true.')
 
   losses = {}
-  with slim.arg_scope([slim.batch_norm, slim.dropout], is_training=is_training):
+  with slim.arg_scope([slim.batch_norm, slim.dropout], is_training=is_training):  # pylint:disable=not-context-manager
     with tf.variable_scope('onsets'):
       onset_outputs = acoustic_model(
           spec, hparams, lstm_units=hparams.onset_lstm_units, lengths=lengths)
@@ -120,6 +121,32 @@ def get_model(transcription_data, hparams, is_training=True):
       onset_losses = tf_utils.log_loss(onset_labels_flat, onset_probs_flat)
       tf.losses.add_loss(tf.reduce_mean(onset_losses))
       losses['onset'] = onset_losses
+
+    with tf.variable_scope('velocity'):
+      # TODO(eriche): this is broken when hparams.velocity_lstm_units > 0
+      velocity_outputs = acoustic_model(
+          spec,
+          hparams,
+          lstm_units=hparams.velocity_lstm_units,
+          lengths=lengths)
+      velocity_values = slim.fully_connected(
+          velocity_outputs,
+          constants.MIDI_PITCHES,
+          activation_fn=None,
+          scope='onset_velocities')
+
+      velocity_values_flat = flatten_maybe_padded_sequences(
+          velocity_values, lengths)
+      tf.identity(velocity_values_flat, name='velocity_values_flat')
+      velocity_labels_flat = flatten_maybe_padded_sequences(
+          velocity_labels, lengths)
+      velocity_loss = tf.reduce_sum(
+          onset_labels_flat *
+          tf.square(velocity_labels_flat - velocity_values_flat),
+          axis=1)
+      tf.losses.add_loss(tf.reduce_mean(velocity_loss))
+      losses['velocity'] = velocity_loss
+
     with tf.variable_scope('frame'):
       if not hparams.share_conv_features:
         # TODO(eriche): this is broken when hparams.frame_lstm_units > 0
@@ -221,26 +248,30 @@ def get_default_hparams():
           activation_loss=False,
           batch_size=8,
           clip_norm=3,
-          combined_lstm_units=128,
-          frame_bidirectional=True,
+          combined_lstm_units=384,
+          frame_bidirectional=False,
           frame_lstm_units=0,
           learning_rate=0.0006,
+          decay_steps=10000,
+          decay_rate=0.98,
           min_duration_ms=0,
           min_frame_occupancy_for_label=0.0,
           normalize_audio=False,
-          onset_bidirectional=True,
+          onset_bidirectional=False,
           onset_delay=0,
           onset_length=32,
-          onset_lstm_units=128,
+          onset_lstm_units=384,
+          velocity_lstm_units=0,
           onset_mode='length_ms',
           sample_rate=constants.DEFAULT_SAMPLE_RATE,
           share_conv_features=False,
           spec_fmin=30.0,
           spec_hop_length=512,
           spec_log_amplitude=True,
+          spec_mel_htk=True,
           spec_n_bins=229,
           spec_type='mel',
           stop_activation_gradient=False,
           stop_onset_gradient=False,
           truncated_length=1500,  # 48 seconds
-          weight_frame_and_activation_loss=False))
+          weight_frame_and_activation_loss=True))

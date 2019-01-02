@@ -18,18 +18,18 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-# internal imports
-
 from . import data
 from . import model
-from .infer_util import pianoroll_to_note_sequence
 from .infer_util import sequence_to_valued_intervals
 
 from mir_eval.transcription import precision_recall_f1_overlap
 
+import numpy as np
 import pretty_midi
 import tensorflow as tf
 import tensorflow.contrib.slim as slim
+
+from magenta.music.sequences_lib import pianoroll_to_note_sequence
 
 
 def _get_data(examples_path, hparams, is_training):
@@ -75,6 +75,7 @@ def train(train_dir,
           examples_path,
           hparams,
           checkpoints_to_keep=5,
+          keep_checkpoint_every_n_hours=1,
           num_steps=None):
   """Train loop."""
   tf.gfile.MakeDirs(train_dir)
@@ -92,7 +93,16 @@ def train(train_dir,
       tf.summary.scalar(loss_label, tf.reduce_mean(loss_collection))
     for name, image in images.iteritems():
       tf.summary.image(name, image)
-    optimizer = tf.train.AdamOptimizer(learning_rate=hparams.learning_rate)
+
+    global_step = tf.train.get_or_create_global_step()
+    learning_rate = tf.train.exponential_decay(
+        hparams.learning_rate,
+        global_step,
+        hparams.decay_steps,
+        hparams.decay_rate,
+        staircase=True)
+    tf.summary.scalar('learning_rate', learning_rate)
+    optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate)
 
     train_op = slim.learning.create_train_op(
         loss,
@@ -104,10 +114,12 @@ def train(train_dir,
 
     hooks = [tf.train.LoggingTensorHook(logging_dict, every_n_iter=100)]
     if num_steps:
-      hooks.append(tf.StopAtStepHook(num_steps))
+      hooks.append(tf.train.StopAtStepHook(num_steps))
 
     scaffold = tf.train.Scaffold(
-        saver=tf.train.Saver(max_to_keep=checkpoints_to_keep))
+        saver=tf.train.Saver(
+            max_to_keep=checkpoints_to_keep,
+            keep_checkpoint_every_n_hours=keep_checkpoint_every_n_hours))
 
     tf.contrib.training.train(
         train_op=train_op,
@@ -140,7 +152,7 @@ def evaluate(train_dir,
         tf.contrib.training.SummaryAtEndHook(eval_dir)]
     tf.contrib.training.evaluate_repeatedly(
         train_dir,
-        eval_ops=metrics_to_updates.values(),
+        eval_ops=list(metrics_to_updates.values()),
         hooks=hooks,
         eval_interval_secs=60,
         timeout=None)
@@ -162,15 +174,18 @@ def test(checkpoint_path, test_dir, examples_path, hparams,
         losses, labels, predictions, images, hparams)
 
     metric_values = slim.evaluation.evaluate_once(
+        master='',
         checkpoint_path=checkpoint_path,
         logdir=test_dir,
         num_evals=num_batches or transcription_data.num_batches,
-        eval_op=metrics_to_updates.values(),
-        final_op=metrics_to_values.values())
+        eval_op=list(metrics_to_updates.values()),
+        final_op=list(metrics_to_values.values()))
 
-    metrics_to_values = dict(zip(metrics_to_values.keys(), metric_values))
+    metrics_to_values = dict(zip(list(metrics_to_values.keys()), metric_values))
     for metric in metrics_to_values:
-      print('%s: %f' % (metric, metrics_to_values[metric]))
+      value = metrics_to_values[metric]
+      if np.isscalar(value):
+        print('%s: %f' % (metric, value))
 
 
 def _note_metrics_op(labels, predictions, hparams, offset_ratio=None):

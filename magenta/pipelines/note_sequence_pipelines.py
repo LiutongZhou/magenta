@@ -15,7 +15,6 @@
 
 import copy
 
-# internal imports
 import tensorflow as tf
 
 from magenta.music import constants
@@ -168,9 +167,8 @@ class TranspositionPipeline(NoteSequencePipeline):
     self._max_pitch = max_pitch
 
   def transform(self, sequence):
-    stats = dict([(state_name, statistics.Counter(state_name)) for state_name in
-                  ['skipped_due_to_range_exceeded',
-                   'transpositions_generated']])
+    stats = dict((state_name, statistics.Counter(state_name)) for state_name in
+                 ['skipped_due_to_range_exceeded', 'transpositions_generated'])
 
     if sequence.key_signatures:
       tf.logging.warn('Key signatures ignored by TranspositionPipeline.')

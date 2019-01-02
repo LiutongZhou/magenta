@@ -2,9 +2,9 @@
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
-# internal imports
 import numpy as np
 import pretty_midi
+import tensorflow as tf
 
 
 class PitchOutOfEncodeRangeError(Exception):
@@ -13,11 +13,10 @@ class PitchOutOfEncodeRangeError(Exception):
 
 
 def get_pianoroll_encoder_decoder(hparams):
-  min_pitch, max_pitch = hparams.pitch_ranges
   encoder_decoder = PianorollEncoderDecoder(
       shortest_duration=hparams.shortest_duration,
-      min_pitch=min_pitch,
-      max_pitch=max_pitch,
+      min_pitch=hparams.min_pitch,
+      max_pitch=hparams.max_pitch,
       separate_instruments=hparams.separate_instruments,
       num_instruments=hparams.num_instruments,
       quantization_level=hparams.quantization_level)
@@ -53,7 +52,7 @@ class PianorollEncoderDecoder(object):
     # Sequence can either be a 2D numpy array or a list of lists.
     if (isinstance(sequence, np.ndarray) and sequence.ndim == 2) or (
         isinstance(sequence, list) and
-        (isinstance(sequence[0], list) or isinstance(sequence[0], tuple))):
+        isinstance(sequence[0], (list, tuple))):
       # If sequence is an numpy array should have shape (time, num_instruments).
       if (isinstance(sequence, np.ndarray) and
           sequence.shape[-1] != self.num_instruments):
@@ -149,9 +148,9 @@ class PianorollEncoderDecoder(object):
     # Returns matrix of shape (128, time) with summed velocities.
     roll = midi.get_piano_roll(fs=fs)  # 16th notes
     roll = np.where(roll > 0, 1, 0)
-    print(roll.shape)
+    tf.logging.debug('Roll shape: %s', roll.shape)
     roll = roll.T
-    print(np.argmax(roll, 1))
+    tf.logging.debug('Roll argmax: %s', np.argmax(roll, 1))
     return roll
 
   def encode_midi_to_pianoroll(self, midi, requested_shape):
@@ -167,7 +166,7 @@ class PianorollEncoderDecoder(object):
     unused_tempo_change_times, tempo_changes = midi.get_tempo_changes()
     assert len(tempo_changes) == 1
 
-    print('# of instr', len(midi.instruments))
+    tf.logging.debug('# of instr %d', len(midi.instruments))
     # Encode each instrument separately.
     instr_rolls = [
         self.get_instr_pianoroll(instr, requested_shape)
@@ -179,15 +178,17 @@ class PianorollEncoderDecoder(object):
 
     max_tt = np.max([roll.shape[0] for roll in instr_rolls])
     if tt < max_tt:
-      print('WARNING: input midi is a longer sequence then the requested',
-            'size (%d > %d)' % (max_tt, tt))
+      tf.logging.warning(
+          'WARNING: input midi is a longer sequence then the requested'
+          'size (%d > %d)', max_tt, tt)
     elif max_tt < tt:
       max_tt = tt
     pianorolls = np.zeros((bb, max_tt, pp, ii))
     for i, roll in enumerate(instr_rolls):
       pianorolls[:, :roll.shape[0], :, i] = np.tile(roll[:, :], (bb, 1, 1))
-    print('Requested roll shape:', requested_shape)
-    print(np.argmax(pianorolls, axis=2) + self.min_pitch)
+    tf.logging.debug('Requested roll shape: %s', requested_shape)
+    tf.logging.debug('Roll argmax: %s',
+                     np.argmax(pianorolls, axis=2) + self.min_pitch)
     return pianorolls
 
   def get_instr_pianoroll(self, midi_instr, requested_shape):

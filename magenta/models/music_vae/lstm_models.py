@@ -19,9 +19,9 @@ from __future__ import print_function
 
 import abc
 
-# internal imports
 import numpy as np
 import tensorflow as tf
+import tensorflow_probability as tfp
 
 from magenta.common import flatten_maybe_padded_sequences
 from magenta.common import Nade
@@ -32,6 +32,7 @@ from tensorflow.contrib import seq2seq
 from tensorflow.python.framework import tensor_util
 from tensorflow.python.layers import core as layers_core
 from tensorflow.python.util import nest
+
 
 
 # ENCODERS
@@ -282,7 +283,7 @@ class BaseLstmDecoder(base_model.BaseDecoder):
       -`_flat_reconstruction_loss`
   """
 
-  def build(self, hparams, output_depth, is_training=False):
+  def build(self, hparams, output_depth, is_training=True):
     if hparams.use_cudnn and hparams.residual_decoder:
       raise ValueError('Residual connections not supported in cuDNN.')
 
@@ -557,7 +558,7 @@ class CategoricalLstmDecoder(BaseLstmDecoder):
     return r_loss, metric_map
 
   def _sample(self, rnn_output, temperature=1.0):
-    sampler = tf.contrib.distributions.OneHotCategorical(
+    sampler = tfp.distributions.OneHotCategorical(
         logits=rnn_output / temperature, dtype=tf.float32)
     return sampler.sample()
 
@@ -685,11 +686,11 @@ class MultiOutCategoricalLstmDecoder(CategoricalLstmDecoder):
   def __init__(self, output_depths):
     self._output_depths = output_depths
 
-  def build(self, hparams, output_depth, is_training):
+  def build(self, hparams, output_depth, is_training=True):
     if sum(self._output_depths) != output_depth:
       raise ValueError(
-          'Decoder output depth does not match sum of sub-decoders: %s vs %d',
-          self._output_depths, output_depth)
+          'Decoder output depth does not match sum of sub-decoders: %s vs %d' %
+          (self._output_depths, output_depth))
     super(MultiOutCategoricalLstmDecoder, self).build(
         hparams, output_depth, is_training)
 
@@ -714,7 +715,7 @@ class MultiOutCategoricalLstmDecoder(CategoricalLstmDecoder):
     split_logits = tf.split(rnn_output, self._output_depths, axis=-1)
     samples = []
     for logits, output_depth in zip(split_logits, self._output_depths):
-      sampler = tf.contrib.distributions.Categorical(
+      sampler = tfp.distributions.Categorical(
           logits=logits / temperature)
       sample_label = sampler.sample()
       samples.append(tf.one_hot(sample_label, output_depth, dtype=tf.float32))
@@ -744,8 +745,8 @@ class SplitMultiOutLstmDecoder(base_model.BaseDecoder):
     if len(core_decoders) != len(output_depths):
       raise ValueError(
           'The number of `core_decoders` and `output_depths` provided to a '
-          'SplitMultiOutLstmDecoder must be equal. Got: %d != %d',
-          len(core_decoders), len(output_depths))
+          'SplitMultiOutLstmDecoder must be equal. Got: %d != %d' %
+          (len(core_decoders), len(output_depths)))
     self._core_decoders = core_decoders
     self._output_depths = output_depths
 
@@ -754,11 +755,11 @@ class SplitMultiOutLstmDecoder(base_model.BaseDecoder):
     return nest.map_structure(
         lambda *x: sum(x), *(cd.state_size for cd in self._core_decoders))
 
-  def build(self, hparams, output_depth, is_training):
+  def build(self, hparams, output_depth, is_training=True):
     if sum(self._output_depths) != output_depth:
       raise ValueError(
-          'Decoder output depth does not match sum of sub-decoders: %s vs %d',
-          self._output_depths, output_depth)
+          'Decoder output depth does not match sum of sub-decoders: %s vs %d' %
+          (self._output_depths, output_depth))
     self.hparams = hparams
     self._is_training = is_training
 
@@ -960,7 +961,7 @@ class HierarchicalLstmDecoder(base_model.BaseDecoder):
     self._disable_autoregression = disable_autoregression
     self._hierarchical_encoder = hierarchical_encoder
 
-  def build(self, hparams, output_depth, is_training):
+  def build(self, hparams, output_depth, is_training=True):
     self.hparams = hparams
     self._output_depth = output_depth
     self._total_length = hparams.max_seq_len
@@ -1077,7 +1078,7 @@ class HierarchicalLstmDecoder(base_model.BaseDecoder):
     hier_t = tf.reshape(t, hier_shape)
     # Move the batch dimension to after the hierarchical dimensions.
     num_levels = len(level_lengths)
-    perm = range(len(hier_shape))
+    perm = list(range(len(hier_shape)))
     perm.insert(num_levels, perm.pop(0))
     return tf.transpose(hier_t, perm)
 
@@ -1278,3 +1279,74 @@ def get_default_hparams():
       'residual_decoder': False,  # Use residual connections in decoder.
   })
   return tf.contrib.training.HParams(**hparams_map)
+
+
+class GrooveLstmDecoder(BaseLstmDecoder):
+  """Groove LSTM decoder with MSE loss for continuous values.
+
+  At each timestep, this decoder outputs a vector of length (N_INSTRUMENTS*3).
+  The default number of drum instruments is 9, with drum categories defined in
+  drums_encoder_decoder.py
+
+  For each instrument, the model outputs a triple of (on/off, velocity, offset),
+  with a binary representation for on/off, continuous values between 0 and 1
+  for velocity, and continuous values between -0.5 and 0.5 for offset.
+  """
+
+  def _activate_outputs(self, flat_rnn_output):
+    output_hits, output_velocities, output_offsets = tf.split(
+        flat_rnn_output, 3, axis=1)
+
+    output_hits = tf.nn.sigmoid(output_hits)
+    output_velocities = tf.nn.sigmoid(output_velocities)
+    output_offsets = tf.nn.tanh(output_offsets)
+
+    return output_hits, output_velocities, output_offsets
+
+  def _flat_reconstruction_loss(self, flat_x_target, flat_rnn_output):
+    # flat_x_target is by default shape (1,27), [on/offs... vels...offsets...]
+    # split into 3 equal length vectors
+    target_hits, target_velocities, target_offsets = tf.split(
+        flat_x_target, 3, axis=1)
+
+    output_hits, output_velocities, output_offsets = self._activate_outputs(
+        flat_rnn_output)
+
+    hits_loss = tf.reduce_sum(tf.losses.log_loss(
+        labels=target_hits, predictions=output_hits,
+        reduction=tf.losses.Reduction.NONE), axis=1)
+
+    velocities_loss = tf.reduce_sum(tf.losses.mean_squared_error(
+        target_velocities, output_velocities,
+        reduction=tf.losses.Reduction.NONE), axis=1)
+
+    offsets_loss = tf.reduce_sum(tf.losses.mean_squared_error(
+        target_offsets, output_offsets,
+        reduction=tf.losses.Reduction.NONE), axis=1)
+
+    loss = hits_loss + velocities_loss + offsets_loss
+
+    metric_map = {
+        'metrics/hits_loss':
+            tf.metrics.mean(hits_loss),
+        'metrics/velocities_loss':
+            tf.metrics.mean(velocities_loss),
+        'metrics/offsets_loss':
+            tf.metrics.mean(offsets_loss)
+    }
+
+    return loss, metric_map
+
+  def _sample(self, rnn_output, temperature=1.0):
+    output_hits, output_velocities, output_offsets = tf.split(
+        rnn_output, 3, axis=1)
+
+    output_velocities = tf.nn.sigmoid(output_velocities)
+    output_offsets = tf.nn.tanh(output_offsets)
+
+    hits_sampler = tfp.distributions.Bernoulli(
+        logits=output_hits / temperature, dtype=tf.float32)
+
+    output_hits = hits_sampler.sample()
+    return tf.concat([output_hits, output_velocities, output_offsets], axis=1)
+
