@@ -1,16 +1,17 @@
-# Copyright 2017 Google Inc. All Rights Reserved.
+# Copyright 2019 The Magenta Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
 #
-#    http://www.apache.org/licenses/LICENSE-2.0
+#     http://www.apache.org/licenses/LICENSE-2.0
 #
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 """Distills a trained style prediction network using a MobileNetV2.
 """
 from __future__ import absolute_import
@@ -20,11 +21,10 @@ from __future__ import print_function
 import ast
 import os
 
-import tensorflow as tf
-
 from magenta.models.arbitrary_image_stylization import arbitrary_image_stylization_build_mobilenet_model as build_mobilenet_model
 from magenta.models.arbitrary_image_stylization import arbitrary_image_stylization_build_model as build_model
 from magenta.models.image_stylization import image_utils
+import tensorflow as tf
 
 slim = tf.contrib.slim
 

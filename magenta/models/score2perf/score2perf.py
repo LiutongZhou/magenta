@@ -1,16 +1,17 @@
-# Copyright 2018 Google Inc. All Rights Reserved.
+# Copyright 2019 The Magenta Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
 #
-#    http://www.apache.org/licenses/LICENSE-2.0
+#     http://www.apache.org/licenses/LICENSE-2.0
 #
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 """Performance generation from score in Tensor2Tensor."""
 
 from __future__ import absolute_import
@@ -21,20 +22,17 @@ import functools
 import itertools
 import sys
 
+from magenta.models.score2perf import modalities
+from magenta.models.score2perf import music_encoders
+from magenta.music import chord_symbols_lib
+from magenta.music import sequences_lib
 from tensor2tensor.data_generators import problem
 from tensor2tensor.layers import modalities as t2t_modalities
 from tensor2tensor.utils import registry
-
 import tensorflow as tf
 
-from magenta.models.score2perf import modalities
-from magenta.models.score2perf import music_encoders
-
-from magenta.music import chord_symbols_lib
-from magenta.music import sequences_lib
-
 if sys.version_info.major == 2:
-  from magenta.models.score2perf import datagen_beam  # pylint:disable=g-import-not-at-top
+  from magenta.models.score2perf import datagen_beam  # pylint:disable=g-import-not-at-top,ungrouped-imports
 
 # TODO(iansimon): figure out the best way not to hard-code these constants
 
@@ -125,7 +123,7 @@ class Score2PerfProblem(problem.Problem):
             augmented_ns, transpose_amount,
             min_allowed_pitch=MIN_PITCH, max_allowed_pitch=MAX_PITCH,
             in_place=True)
-      except chord_symbols_lib.ChordSymbolException:
+      except chord_symbols_lib.ChordSymbolError:
         raise datagen_beam.DataAugmentationError(
             'Transposition of chord symbol(s) failed.')
       if num_deleted_notes:
@@ -159,15 +157,16 @@ class Score2PerfProblem(problem.Problem):
         absolute_timing=self.absolute_timing)
 
   def hparams(self, defaults, model_hparams):
+    del model_hparams   # unused
     perf_encoder = self.get_feature_encoders()['targets']
-    defaults.modality = {'targets': t2t_modalities.SymbolModality}
+    defaults.modality = {'targets': t2t_modalities.ModalityType.SYMBOL}
     defaults.vocab_size = {'targets': perf_encoder.vocab_size}
     if self.has_inputs:
       score_encoder = self.get_feature_encoders()['inputs']
       if isinstance(score_encoder.vocab_size, list):
         modality_cls = modalities.SymbolTupleModality
       else:
-        modality_cls = t2t_modalities.SymbolModality
+        modality_cls = t2t_modalities.ModalityType.SYMBOL
       defaults.modality['inputs'] = modality_cls
       defaults.vocab_size['inputs'] = score_encoder.vocab_size
 

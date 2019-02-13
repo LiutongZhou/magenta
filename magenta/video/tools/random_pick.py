@@ -1,16 +1,17 @@
-# Copyright 2017 Google Inc. All Rights Reserved.
+# Copyright 2019 The Magenta Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
 #
-#    http://www.apache.org/licenses/LICENSE-2.0
+#     http://www.apache.org/licenses/LICENSE-2.0
 #
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 """This tools pick some frames randomly from a folder to an other.
 
 Only useful if used with the --limit flag unless it will copy the whole folder
@@ -21,9 +22,8 @@ import argparse
 import glob
 import ntpath
 import os
-from random import shuffle
-from shutil import copyfile
-from shutil import move
+import random
+import shutil
 
 PARSER = argparse.ArgumentParser(description='')
 PARSER.add_argument(
@@ -75,7 +75,7 @@ def random_pick(path_in, path_out, limit, delete):
   print('found ', file_count, 'files')
   if limit > 0:
     print('will use limit of', limit, 'files')
-    shuffle(files)
+    random.shuffle(files)
     files = files[:limit]
 
   i = 0
@@ -87,10 +87,10 @@ def random_pick(path_in, path_out, limit, delete):
     try:
       if delete:
         print(i, '/', limit, '  moving', image_file, 'to', file_out)
-        move(image_file, file_out)
+        shutil.move(image_file, file_out)
       else:
         print(i, '/', limit, '  copying', image_file, 'to', file_out)
-        copyfile(image_file, file_out)
+        shutil.copyfile(image_file, file_out)
     except:  # pylint: disable=bare-except
       print("""can't pick file""", image_file, 'to', file_out)
 

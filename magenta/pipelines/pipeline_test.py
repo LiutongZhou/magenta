@@ -1,16 +1,17 @@
-# Copyright 2016 Google Inc. All Rights Reserved.
+# Copyright 2019 The Magenta Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
 #
-#    http://www.apache.org/licenses/LICENSE-2.0
+#     http://www.apache.org/licenses/LICENSE-2.0
 #
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 """Tests for pipeline."""
 
 from __future__ import absolute_import
@@ -20,12 +21,10 @@ from __future__ import print_function
 import os
 import tempfile
 
-import tensorflow as tf
-
 from magenta.common import testing_lib
 from magenta.pipelines import pipeline
 from magenta.pipelines import statistics
-
+import tensorflow as tf
 
 MockStringProto = testing_lib.MockStringProto  # pylint: disable=invalid-name
 
@@ -167,12 +166,9 @@ class PipelineTest(tf.test.TestCase):
     with self.assertRaises(ValueError):
       _ = pipeline.PipelineKey(1234, 'abc')
 
-  def testInvalidTypeSignatureException(self):
+  def testInvalidTypeSignatureError(self):
 
     class PipelineShell(pipeline.Pipeline):
-
-      def __init__(self, input_type, output_type):
-        super(PipelineShell, self).__init__(input_type, output_type)
 
       def transform(self, input_object):
         pass
@@ -183,9 +179,9 @@ class PipelineTest(tf.test.TestCase):
     good_type = str
     for bad_type in [123, {1: str}, {'name': 123},
                      {'name': str, 'name2': 123}, [str, int]]:
-      with self.assertRaises(pipeline.InvalidTypeSignatureException):
+      with self.assertRaises(pipeline.InvalidTypeSignatureError):
         PipelineShell(bad_type, good_type)
-      with self.assertRaises(pipeline.InvalidTypeSignatureException):
+      with self.assertRaises(pipeline.InvalidTypeSignatureError):
         PipelineShell(good_type, bad_type)
 
   def testPipelineGivenName(self):
@@ -231,7 +227,7 @@ class PipelineTest(tf.test.TestCase):
         set([('TestPipeline123_counter_1', 5),
              ('TestPipeline123_counter_2', 10)]))
 
-  def testInvalidStatisticsException(self):
+  def testInvalidStatisticsError(self):
 
     class TestPipeline1(pipeline.Pipeline):
 
@@ -254,11 +250,11 @@ class PipelineTest(tf.test.TestCase):
         return [input_object]
 
     tp1 = TestPipeline1()
-    with self.assertRaises(pipeline.InvalidStatisticsException):
+    with self.assertRaises(pipeline.InvalidStatisticsError):
       tp1.transform('hello')
 
     tp2 = TestPipeline2()
-    with self.assertRaises(pipeline.InvalidStatisticsException):
+    with self.assertRaises(pipeline.InvalidStatisticsError):
       tp2.transform('hello')
 
 

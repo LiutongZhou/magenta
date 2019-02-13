@@ -1,16 +1,17 @@
-# Copyright 2018 Google Inc. All Rights Reserved.
+# Copyright 2019 The Magenta Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
 #
-#    http://www.apache.org/licenses/LICENSE-2.0
+#     http://www.apache.org/licenses/LICENSE-2.0
 #
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 """Common functions/helpers for the joint model.
 
 This library contains many comman functions and helpers used to train (using
@@ -45,12 +46,11 @@ from __future__ import print_function
 import importlib
 import os
 
+from magenta.models.latent_transfer import common
+from magenta.models.latent_transfer import model_dataspace
 import numpy as np
 from scipy.io import wavfile
 import tensorflow as tf
-
-from magenta.models.latent_transfer import common
-from magenta.models.latent_transfer import model_dataspace
 
 FLAGS = tf.flags.FLAGS
 tf.flags.DEFINE_string(
@@ -313,10 +313,12 @@ class PairedDataIterator(object):
     batch_label_B = self.label_B[batch_index_B]
     assert np.array_equal(batch_label_A, batch_label_B)
 
-    batch_train_data_A = self.train_data_A[
-        batch_index_A] if self.train_data_A is not None else None
-    batch_train_data_B = self.train_data_B[
-        batch_index_B] if self.train_data_B is not None else None
+    batch_train_data_A = (
+        None if self._train_data_A is None else self.train_data_A[batch_index_A]
+    )
+    batch_train_data_B = (
+        None if self._train_data_B is None else self.train_data_B[batch_index_B]
+    )
     debug_info = (batch_train_data_A, batch_train_data_B)
 
     return batch_A, batch_B, debug_info
@@ -734,7 +736,7 @@ class ModelWaveGANHelper(object):
 class OneSideHelper(object):
   """The helper that manages model and classifier in dataspace for joint model.
 
-  Attributes:
+  Args:
     config_name: A string representing the name of config for model in
         dataspace.
     exp_uid: A string representing the unique id of experiment used in

@@ -1,28 +1,27 @@
-# Copyright 2016 Google Inc. All Rights Reserved.
+# Copyright 2019 The Magenta Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
 #
-#    http://www.apache.org/licenses/LICENSE-2.0
+#     http://www.apache.org/licenses/LICENSE-2.0
 #
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 """Polyphonic RNN generation code as a SequenceGenerator interface."""
 
 import copy
 import functools
 
-import tensorflow as tf
-
 from magenta.models.polyphony_rnn import polyphony_lib
 from magenta.models.polyphony_rnn import polyphony_model
 from magenta.models.polyphony_rnn.polyphony_lib import PolyphonicEvent
-
 import magenta.music as mm
+import tensorflow as tf
 
 
 class PolyphonyRnnSequenceGenerator(mm.BaseSequenceGenerator):
@@ -48,11 +47,11 @@ class PolyphonyRnnSequenceGenerator(mm.BaseSequenceGenerator):
 
   def _generate(self, input_sequence, generator_options):
     if len(generator_options.input_sections) > 1:
-      raise mm.SequenceGeneratorException(
+      raise mm.SequenceGeneratorError(
           'This model supports at most one input_sections message, but got %s' %
           len(generator_options.input_sections))
     if len(generator_options.generate_sections) != 1:
-      raise mm.SequenceGeneratorException(
+      raise mm.SequenceGeneratorError(
           'This model supports only 1 generate_sections message, but got %s' %
           len(generator_options.generate_sections))
 
@@ -76,10 +75,13 @@ class PolyphonyRnnSequenceGenerator(mm.BaseSequenceGenerator):
       primer_sequence = input_sequence
       input_start_step = 0
 
-    last_end_time = (max(n.end_time for n in primer_sequence.notes)
-                     if primer_sequence.notes else 0)
+    if primer_sequence.notes:
+      last_end_time = max(n.end_time for n in primer_sequence.notes)
+    else:
+      last_end_time = 0
+
     if last_end_time > generate_section.start_time:
-      raise mm.SequenceGeneratorException(
+      raise mm.SequenceGeneratorError(
           'Got GenerateSection request for section that is before or equal to '
           'the end of the NoteSequence. This model can only extend sequences. '
           'Requested start time: %s, Final note end time: %s' %

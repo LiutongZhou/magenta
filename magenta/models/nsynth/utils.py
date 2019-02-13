@@ -1,16 +1,17 @@
-# Copyright 2017 Google Inc. All Rights Reserved.
+# Copyright 2019 The Magenta Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
 #
-#    http://www.apache.org/licenses/LICENSE-2.0
+#     http://www.apache.org/licenses/LICENSE-2.0
 #
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 """Utility functions for NSynth."""
 
 from __future__ import absolute_import
@@ -411,8 +412,10 @@ def tf_ispecgram(spec,
   """Inverted Specgram tensorflow op (uses pyfunc)."""
   dims = spec.get_shape().as_list()
   # Add back in nyquist frequency
-  x = spec if not pad else tf.concat(
-      [spec, tf.zeros([dims[0], 1, dims[2], dims[3]])], 1)
+  if pad:
+    x = tf.concat([spec, tf.zeros([dims[0], 1, dims[2], dims[3]])], 1)
+  else:
+    x = spec
   audio = tf.py_func(batch_ispecgram, [
       x, n_fft, hop_length, mask, log_mag, re_im, dphase, mag_only, num_iters
   ], tf.float32)

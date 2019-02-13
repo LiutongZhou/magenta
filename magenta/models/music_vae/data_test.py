@@ -1,16 +1,17 @@
-# Copyright 2017 Google Inc. All Rights Reserved.
+# Copyright 2019 The Magenta Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
 #
-#    http://www.apache.org/licenses/LICENSE-2.0
+#     http://www.apache.org/licenses/LICENSE-2.0
 #
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 """Tests for MusicVAE data library."""
 
 from __future__ import absolute_import
@@ -19,15 +20,13 @@ from __future__ import print_function
 
 import functools
 
-import numpy as np
-import tensorflow as tf
-
 from magenta.models.music_vae import data
-
 import magenta.music as mm
 from magenta.music import constants
 from magenta.music import testing_lib
 from magenta.protobuf import music_pb2
+import numpy as np
+import tensorflow as tf
 
 NO_EVENT = constants.MELODY_NO_EVENT
 NOTE_OFF = constants.MELODY_NOTE_OFF
@@ -847,7 +846,6 @@ class TrioConverterTest(BaseDataTest, tf.test.TestCase):
         total_time: 4.0
         """,
         sequences[0])
-
 
 
 class GrooveConverterTest(tf.test.TestCase):

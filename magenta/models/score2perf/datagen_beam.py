@@ -1,18 +1,19 @@
-# pylint: skip-file
-# TODO(iansimon): Enable when Apache Beam supports Python 3.
-# Copyright 2018 Google Inc. All Rights Reserved.
+# Copyright 2019 The Magenta Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
 #
-#    http://www.apache.org/licenses/LICENSE-2.0
+#     http://www.apache.org/licenses/LICENSE-2.0
 #
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
+# pylint: skip-file
+# TODO(iansimon): Enable when Apache Beam supports Python 3.
 """Beam pipeline to generate examples for a Score2Perf dataset."""
 
 from __future__ import absolute_import
@@ -27,19 +28,16 @@ import os
 import random
 
 from absl import flags
-
 import apache_beam as beam
 from apache_beam import typehints
 from apache_beam.metrics import Metrics
-
-import numpy as np
-from tensor2tensor.data_generators import generator_utils
-import tensorflow as tf
-
 from magenta.music import chord_inference
 from magenta.music import melody_inference
 from magenta.music import sequences_lib
 from magenta.protobuf import music_pb2
+import numpy as np
+from tensor2tensor.data_generators import generator_utils
+import tensorflow as tf
 
 # TODO(iansimon): this should probably be defined in the problem
 SCORE_BPM = 120.0
@@ -62,7 +60,10 @@ class ReadNoteSequencesFromTFRecord(beam.PTransform):
     self._tfrecord_path = tfrecord_path
 
   def expand(self, pcoll):
-    pcoll |= beam.io.tfrecordio.ReadFromTFRecord(self._tfrecord_path)
+    # Awkward to use ReadAllFromTFRecord instead of ReadFromTFRecord here,
+    # but for some reason ReadFromTFRecord doesn't work with gs:// URLs.
+    pcoll |= beam.Create([self._tfrecord_path])
+    pcoll |= beam.io.tfrecordio.ReadAllFromTFRecord()
     pcoll |= beam.Map(
         lambda ns_str: (music_pb2.NoteSequence.FromString(ns_str).id, ns_str))
     return pcoll
@@ -231,7 +232,7 @@ class ExtractExamplesDoFn(beam.DoFn):
                 chord_change_prob=0.25,
                 chord_note_concentration=50.0,
                 add_key_signatures=True)
-          except chord_inference.ChordInferenceException:
+          except chord_inference.ChordInferenceError:
             Metrics.counter('extract_examples', 'chord_inference_failed').inc()
             continue
 
@@ -244,7 +245,7 @@ class ExtractExamplesDoFn(beam.DoFn):
               instantaneous_non_max_pitch_prob=1e-15,
               instantaneous_non_empty_rest_prob=0.0,
               instantaneous_missing_pitch_prob=1e-15)
-        except melody_inference.MelodyInferenceException:
+        except melody_inference.MelodyInferenceError:
           Metrics.counter('extract_examples', 'melody_inference_failed').inc()
           continue
 

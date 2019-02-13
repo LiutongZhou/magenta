@@ -1,27 +1,27 @@
-# Copyright 2016 Google Inc. All Rights Reserved.
+# Copyright 2019 The Magenta Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
 #
-#    http://www.apache.org/licenses/LICENSE-2.0
+#     http://www.apache.org/licenses/LICENSE-2.0
 #
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 """Tests for sequence_generator."""
 
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-import tensorflow as tf
-
 from magenta.music import model
 from magenta.music import sequence_generator
 from magenta.protobuf import generator_pb2
+import tensorflow as tf
 
 
 class Model(model.BaseModel):
@@ -54,9 +54,9 @@ class SequenceGeneratorTest(tf.test.TestCase):
         checkpoint_file=[b'foo.ckpt'],
         metagraph_file=b'foo.ckpt.meta')
 
-    with self.assertRaises(sequence_generator.SequenceGeneratorException):
+    with self.assertRaises(sequence_generator.SequenceGeneratorError):
       SeuenceGenerator(checkpoint='foo.ckpt', bundle=bundle)
-    with self.assertRaises(sequence_generator.SequenceGeneratorException):
+    with self.assertRaises(sequence_generator.SequenceGeneratorError):
       SeuenceGenerator(checkpoint=None, bundle=None)
 
     SeuenceGenerator(checkpoint='foo.ckpt')
@@ -73,7 +73,7 @@ class SequenceGeneratorTest(tf.test.TestCase):
 
     bundle.generator_details.id = 'blarg'
 
-    with self.assertRaises(sequence_generator.SequenceGeneratorException):
+    with self.assertRaises(sequence_generator.SequenceGeneratorError):
       SeuenceGenerator(bundle=bundle)
 
   def testGetBundleDetails(self):

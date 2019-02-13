@@ -1,29 +1,28 @@
-# Copyright 2017 Google Inc. All Rights Reserved.
+# Copyright 2019 The Magenta Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
 #
-#    http://www.apache.org/licenses/LICENSE-2.0
+#     http://www.apache.org/licenses/LICENSE-2.0
 #
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 """Classes for converting between performance input and model input/output."""
 
 from __future__ import division
 
 import math
 
-import numpy as np
-
 from magenta.music import encoder_decoder
 from magenta.music import performance_lib
 from magenta.music.encoder_decoder import EventSequenceEncoderDecoder
 from magenta.music.performance_lib import PerformanceEvent
-
+import numpy as np
 
 # Number of floats used to encode NOTE_ON and NOTE_OFF events, using modulo-12
 # encoding. 5 floats for: valid, octave_cos, octave_sin, note_cos, note_sin.
