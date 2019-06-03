@@ -44,7 +44,7 @@ REQUIRED_PACKAGES = [
     'matplotlib >= 1.5.3',
     'mido == 1.2.6',
     'mir_eval >= 0.4',
-    'numpy >= 1.14.6, <= 1.15.4',  # higher versions confuse pylint.
+    'numpy >= 1.14.6',  # 1.14.6 is required for colab compatibility.
     'pandas >= 0.18.1',
     'pretty_midi >= 0.2.6',
     'protobuf >= 3.6.1',
@@ -54,11 +54,12 @@ REQUIRED_PACKAGES = [
     'sk-video',
     'sonnet',
     'sox >= 1.3.7',
+    'tensorflow-datasets >= 1.0.2',
     'tensorflow-probability >= 0.5.0',
     'tensor2tensor >= 1.10.0',
     'wheel',
     'futures;python_version=="2.7"',
-    'apache-beam >= 2.8.0;python_version=="2.7"',
+    'apache-beam[gcp] >= 2.8.0;python_version=="2.7"',
 ]
 
 if gpu_mode:
@@ -153,5 +154,12 @@ setup(
         'magenta': ['models/image_stylization/evaluation_images/*.jpg'],
     },
     setup_requires=['pytest-runner', 'pytest-pylint'],
-    tests_require=['pytest', 'pylint'],
+    tests_require=[
+        'pytest',
+        'pylint < 2.0.0;python_version<"3"',
+        # pylint 2.3.0 and astroid 2.2.0 caused spurious errors,
+        # so lock them down to known good versions.
+        'pylint == 2.2.2;python_version>="3"',
+        'astroid == 2.0.4;python_version>="3"',
+    ],
 )

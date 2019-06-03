@@ -448,6 +448,7 @@ class TrainTimeHook(tf.train.SessionRunHook):
 
   Optionally stops training if we've passed a time limit.
   """
+  _last_run_start_time = Ellipsis  # type: float
 
   def __init__(self, train_time, time_limit=None):
     super(TrainTimeHook, self).__init__()

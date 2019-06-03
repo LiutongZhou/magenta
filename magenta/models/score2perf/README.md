@@ -77,7 +77,7 @@ to train:
 
 ```
 DATA_DIR=/generated/tfrecords/dir
-HPARAMS_SET=transformer_base
+HPARAMS_SET=score2perf_transformer_base
 MODEL=transformer
 PROBLEM=score2perf_maestro_language_uncropped_aug
 TRAIN_DIR=/training/dir
@@ -103,7 +103,8 @@ t2t_trainer \
 Then you can use the interactive T2T decoder script to sample from the model:
 
 ```
-HPARAMS_SET=transformer_base
+DATA_DIR=/generated/tfrecords/dir
+HPARAMS_SET=score2perf_transformer_base
 MODEL=transformer
 PROBLEM=score2perf_maestro_language_uncropped_aug
 TRAIN_DIR=/training/dir
@@ -114,6 +115,7 @@ DECODE_HPARAMS=\
 "extra_length=2048"
 
 t2t_decoder \
+  --data_dir="${DATA_DIR}" \
   --decode_hparams="${DECODE_HPARAMS}" \
   --decode_interactive \
   --hparams="sampling_method=random" \

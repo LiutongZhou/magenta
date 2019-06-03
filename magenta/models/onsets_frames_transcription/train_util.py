@@ -18,40 +18,23 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-from magenta.models.onsets_frames_transcription import data
-from magenta.models.onsets_frames_transcription import infer_util
-from magenta.models.onsets_frames_transcription import model
-from magenta.music import sequences_lib
+import collections
+import copy
+import functools
+import random
+import sys
 
-from mir_eval.transcription import precision_recall_f1_overlap
-
-import numpy as np
-import pretty_midi
-import tensorflow as tf
-
-import tensorflow.contrib.slim as slim
-
-
-def _get_data(examples_path, hparams, is_training):
-  """Gets transcription data."""
-  hparams_dict = hparams.values()
-  batch, _ = data.provide_batch(
-      hparams.batch_size,
-      examples=examples_path,
-      hparams=hparams,
-      truncated_length=hparams_dict.get('truncated_length', None),
-      is_training=is_training,
-      include_note_sequences=hparams_dict.get('include_events', False))
-  return batch
+import tensorflow as tf_head
+import tensorflow.compat.v1 as tf
 
 
 # Should not be called from within the graph to avoid redundant summaries.
-def _trial_summary(hparams, examples_path, output_dir):
+def _trial_summary(hparams, model_dir, output_dir, additional_trial_info):
   """Writes a tensorboard text summary of the trial."""
 
-  examples_path_summary = tf.summary.text(
-      'examples_path', tf.constant(examples_path, name='examples_path'),
-      collections=[])
+  summaries_to_write = collections.OrderedDict()
+  summaries_to_write['model_dir'] = model_dir
+  summaries_to_write['command_line_args'] = ' \\'.join(sys.argv)
 
   tf.logging.info('Writing hparams summary: %s', hparams)
 
@@ -63,338 +46,184 @@ def _trial_summary(hparams, examples_path, output_dir):
   lines = ['| %s | %s |' % (key, str(hparams_dict[key])) for key in keys]
   hparams_table = header + '\n'.join(lines) + '\n'
 
-  hparam_summary = tf.summary.text(
-      'hparams', tf.constant(hparams_table, name='hparams'), collections=[])
+  summaries_to_write['hparams'] = hparams_table
+
+  summaries_to_write.update(additional_trial_info)
 
   with tf.Session() as sess:
     writer = tf.summary.FileWriter(output_dir, graph=sess.graph)
-    writer.add_summary(examples_path_summary.eval())
-    writer.add_summary(hparam_summary.eval())
+    for name, summary in summaries_to_write.items():
+      tf.logging.info('Writing summary for %s: %s', name, summary)
+      writer.add_summary(
+          tf.summary.text(name, tf.constant(summary, name=name),
+                          collections=[]).eval())
     writer.close()
 
 
-def train(train_dir,
-          examples_path,
+def create_estimator(model_fn,
+                     model_dir,
+                     hparams,
+                     use_tpu=False,
+                     master='',
+                     save_checkpoint_steps=300,
+                     save_summary_steps=300,
+                     keep_checkpoint_max=None,
+                     warm_start_from=None):
+  """Creates an estimator."""
+  config = tf_head.contrib.tpu.RunConfig(
+      tpu_config=tf_head.contrib.tpu.TPUConfig(
+          iterations_per_loop=save_checkpoint_steps),
+      master=master,
+      save_summary_steps=save_summary_steps,
+      save_checkpoints_steps=save_checkpoint_steps,
+      keep_checkpoint_max=keep_checkpoint_max,
+      keep_checkpoint_every_n_hours=1)
+
+  params = copy.deepcopy(hparams)
+  params.del_hparam('batch_size')
+  return tf_head.contrib.tpu.TPUEstimator(
+      use_tpu=use_tpu,
+      model_fn=model_fn,
+      model_dir=model_dir,
+      params=params,
+      train_batch_size=hparams.batch_size,
+      eval_batch_size=hparams.eval_batch_size,
+      predict_batch_size=hparams.predict_batch_size,
+      config=config,
+      warm_start_from=warm_start_from,
+      eval_on_tpu=False)
+
+
+def train(master,
+          model_fn,
+          data_fn,
+          additional_trial_info,
+          model_dir,
+          preprocess_examples,
           hparams,
-          checkpoints_to_keep=5,
-          keep_checkpoint_every_n_hours=1,
-          num_steps=None,
-          master='',
-          task=0,
-          num_ps_tasks=0):
+          keep_checkpoint_max,
+          use_tpu,
+          num_steps=None):
   """Train loop."""
-  tf.gfile.MakeDirs(train_dir)
-  is_chief = task == 0
+  estimator = create_estimator(
+      model_fn=model_fn,
+      model_dir=model_dir,
+      master=master,
+      hparams=hparams,
+      keep_checkpoint_max=keep_checkpoint_max,
+      use_tpu=use_tpu)
 
-  if is_chief:
-    _trial_summary(hparams, examples_path, train_dir)
+  if estimator.config.is_chief:
+    _trial_summary(
+        hparams=hparams,
+        model_dir=model_dir,
+        output_dir=model_dir,
+        additional_trial_info=additional_trial_info)
 
-  with tf.Graph().as_default():
-    with tf.device(
-        tf.train.replica_device_setter(num_ps_tasks, merge_devices=True)):
-      transcription_data = _get_data(examples_path, hparams, is_training=True)
+  transcription_data = functools.partial(
+      data_fn,
+      preprocess_examples=preprocess_examples,
+      is_training=True,
+      shuffle_examples=True,
+      skip_n_initial_records=0)
 
-      loss, losses, unused_labels, unused_predictions, images = model.get_model(
-          transcription_data, hparams, is_training=True)
-
-      tf.summary.scalar('loss', loss)
-      for label, loss_collection in losses.items():
-        loss_label = 'losses/' + label
-        tf.summary.scalar(loss_label, tf.reduce_mean(loss_collection))
-      for name, image in images.items():
-        tf.summary.image(name, image)
-
-      global_step = tf.train.get_or_create_global_step()
-      learning_rate = tf.train.exponential_decay(
-          hparams.learning_rate,
-          global_step,
-          hparams.decay_steps,
-          hparams.decay_rate,
-          staircase=True)
-      tf.summary.scalar('learning_rate', learning_rate)
-      frame_optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate)
-
-      frame_train_op = slim.learning.create_train_op(
-          loss,
-          frame_optimizer,
-          clip_gradient_norm=hparams.clip_norm,
-          summarize_gradients=True,
-          variables_to_train=None)
-
-      logging_dict = {'global_step': tf.train.get_global_step(), 'loss': loss}
-      if hasattr(hparams, 'sampling_probability'):
-        logging_dict['sampling_probability'] = hparams.sampling_probability
-
-      frame_hooks = [tf.train.LoggingTensorHook(logging_dict, every_n_iter=100)]
-      if num_steps:
-        frame_hooks.append(tf.train.StopAtStepHook(num_steps))
-
-      scaffold = tf.train.Scaffold(
-          saver=tf.train.Saver(
-              max_to_keep=checkpoints_to_keep,
-              keep_checkpoint_every_n_hours=keep_checkpoint_every_n_hours))
-
-      tf.contrib.training.train(
-          train_op=frame_train_op,
-          logdir=train_dir,
-          scaffold=scaffold,
-          hooks=frame_hooks,
-          save_checkpoint_secs=300,
-          master=master,
-          is_chief=is_chief)
+  estimator.train(input_fn=transcription_data, max_steps=num_steps)
 
 
-def evaluate(train_dir,
-             eval_dir,
-             examples_path,
+def evaluate(master,
+             model_fn,
+             data_fn,
+             additional_trial_info,
+             model_dir,
+             preprocess_examples,
              hparams,
-             num_batches=None,
-             master=''):
-  """Evaluate the model repeatedly."""
-  tf.gfile.MakeDirs(eval_dir)
+             name,
+             num_steps=None):
+  """Train loop."""
+  estimator = create_estimator(
+      model_fn=model_fn, model_dir=model_dir, master=master, hparams=hparams)
 
-  _trial_summary(hparams, examples_path, eval_dir)
-  with tf.Graph().as_default():
-    transcription_data = _get_data(examples_path, hparams, is_training=False)
-    unused_loss, losses, labels, predictions, images = model.get_model(
-        transcription_data, hparams, is_training=False)
+  transcription_data_base = functools.partial(
+      data_fn,
+      preprocess_examples=preprocess_examples,
+      is_training=False)
 
-    _, metrics_to_updates = _get_eval_metrics(
-        losses, labels, predictions, images, hparams)
+  if num_steps is None:
+    transcription_data = transcription_data_base(
+        shuffle_examples=False, skip_n_initial_records=0)
+  else:
+    # If num_steps is specified, we will evaluate only a subset of the data.
+    #
+    # The following is a hack that works around the problems of not being able
+    # to determine the number of records in a given TFRecord shard without
+    # reading the whole thing and not being able to persist a tf.data.Dataset
+    # session across multiple estimator evaluate calls.
+    #
+    # This code tries to select a different subset for every evaluation by doing
+    # the following:
+    # - Setting shuffle_examples=True. This shuffles not only individual
+    #   examples, but also shuffles the order in which shards are read.
+    # - Skipping N examples before starting evaluation, where N is selected
+    #   randomly for each evaluation run. This provides a different starting
+    #   offset.
 
-    hooks = [
-        tf.contrib.training.StopAfterNEvalsHook(
-            num_batches or transcription_data.num_batches),
-        tf.contrib.training.SummaryAtEndHook(eval_dir)]
-    tf.contrib.training.evaluate_repeatedly(
-        train_dir,
-        eval_ops=list(metrics_to_updates.values()),
-        hooks=hooks,
-        eval_interval_secs=60,
-        timeout=None,
-        master=master)
+    # In order to skip a random number of records, we need to provide an upper
+    # bound that will still let us run num_steps evaluation steps before running
+    # out of data. The following code does a one-time check on startup to see
+    # if there are up to num_steps * 5 records available, which would allow
+    # a maximum skip range of [0, num_steps*4].
+    records_to_check = num_steps * 5
+    tf.logging.info('Checking for at least %d records...', records_to_check)
+    records_available = 0
+    with tf.Graph().as_default():
+      record_check_params = copy.deepcopy(hparams)
+      record_check_params.batch_size = 1
+      iterator = transcription_data_base(
+          params=record_check_params,
+          shuffle_examples=False,
+          skip_n_initial_records=0,
+          ).make_initializable_iterator()
+      next_record = iterator.get_next()
+      with tf.Session() as sess:
+        sess.run(iterator.initializer)
+        try:
+          for i in range(records_to_check):
+            del i
+            sess.run(next_record)
+            records_available += 1
+            if records_available % 10 == 0:
+              tf.logging.info('Found %d records...', records_available)
+        except tf.errors.OutOfRangeError:
+          pass
+    # Determine max number of records we could skip and still have num_steps
+    # records remaining.
+    max_records_to_skip = max(0, records_available - num_steps)
+    tf.logging.info('Found at least %d records. '
+                    'Will skip a maximum of %d records during eval runs '
+                    'in order to support %d evaluation steps.',
+                    records_available, max_records_to_skip, num_steps)
 
+    # Since we're doing a limited number of steps, we should shuffle the
+    # examples we're evaluating so each evaluation is over a different portion
+    # of the dataset.
+    def transcription_data(params, *args, **kwargs):
+      assert not args
+      skip_n_initial_records = random.randint(0, max_records_to_skip)
+      tf.logging.info('Skipping %d initial record(s)', skip_n_initial_records)
+      return transcription_data_base(
+          params=params,
+          shuffle_examples=True,
+          skip_n_initial_records=skip_n_initial_records,
+          **kwargs)
 
-def test(checkpoint_path,
-         test_dir,
-         examples_path,
-         hparams,
-         num_batches=None,
-         master=''):
-  """Evaluate the model at a single checkpoint."""
-  tf.gfile.MakeDirs(test_dir)
+  _trial_summary(
+      hparams=hparams,
+      model_dir=model_dir,
+      output_dir=estimator.eval_dir(name),
+      additional_trial_info=additional_trial_info)
 
-  _trial_summary(hparams, examples_path, test_dir)
-  with tf.Graph().as_default():
-    transcription_data = _get_data(
-        examples_path, hparams, is_training=False)
-    unused_loss, losses, labels, predictions, images = model.get_model(
-        transcription_data, hparams, is_training=False)
-
-    metrics_to_values, metrics_to_updates = _get_eval_metrics(
-        losses, labels, predictions, images, hparams)
-
-    metric_values = slim.evaluation.evaluate_once(
-        checkpoint_path=checkpoint_path,
-        logdir=test_dir,
-        num_evals=num_batches or transcription_data.num_batches,
-        eval_op=list(metrics_to_updates.values()),
-        final_op=list(metrics_to_values.values()),
-        master=master)
-
-    metrics_to_values = dict(zip(list(metrics_to_values.keys()), metric_values))
-    for metric in metrics_to_values:
-      value = metrics_to_values[metric]
-      if np.isscalar(value):
-        print('%s: %f' % (metric, value))
-
-
-def _note_metrics_op(labels, predictions, hparams, offset_ratio=None):
-  """An op that provides access to mir_eval note scores through a py_func."""
-
-  def _note_metrics(labels, predictions):
-    """A pyfunc that wraps a call to precision_recall_f1_overlap."""
-    est_sequence = sequences_lib.pianoroll_to_note_sequence(
-        predictions,
-        frames_per_second=data.hparams_frames_per_second(hparams),
-        min_duration_ms=hparams.min_duration_ms)
-
-    ref_sequence = sequences_lib.pianoroll_to_note_sequence(
-        labels,
-        frames_per_second=data.hparams_frames_per_second(hparams),
-        min_duration_ms=hparams.min_duration_ms)
-
-    est_intervals, est_pitches, _ = infer_util.sequence_to_valued_intervals(
-        est_sequence, hparams.min_duration_ms)
-    ref_intervals, ref_pitches, _ = infer_util.sequence_to_valued_intervals(
-        ref_sequence, hparams.min_duration_ms)
-
-    if est_intervals.size == 0 or ref_intervals.size == 0:
-      return 0., 0., 0.
-    note_precision, note_recall, note_f1, _ = precision_recall_f1_overlap(
-        ref_intervals,
-        pretty_midi.note_number_to_hz(ref_pitches),
-        est_intervals,
-        pretty_midi.note_number_to_hz(est_pitches),
-        offset_ratio=offset_ratio)
-
-    return note_precision, note_recall, note_f1
-
-  note_precision, note_recall, note_f1 = tf.py_func(
-      _note_metrics, [labels, predictions],
-      [tf.float64, tf.float64, tf.float64],
-      name='note_scores')
-
-  return note_precision, note_recall, note_f1
-
-
-def _get_eval_metrics(losses, labels, predictions, images, hparams):
-  """Returns evaluation metrics.
-
-  Args:
-    losses: a dict containing losses with a training job.
-    labels: a numpy array or a dict. If a dict, it contains
-      multiple labels for different tasks.
-    predictions: a numpy array or a dict. The type of predictions
-      must match that of labels. If both are dicts, they must have
-      the same keys.
-    images: a dict of images.
-    hparams: a set of hyperparameters.
-
-  Returns: metrics to evaluate and update.
-  """
-  image_prefix = 'images/'
-  if not isinstance(labels, dict):
-    labels = {'default': labels}
-    predictions = {'default': predictions}
-
-  metric_map = {}
-
-  def expand_key(key, metric_name, size):
-    """Return expanded metric name based on size."""
-    if size > 1:
-      return 'metrics/%s/%s' % (key, metric_name)
-    else:
-      return 'metrics/%s' % (metric_name)
-
-  size = len(labels)
-  for key in labels.keys():
-    metric_map[expand_key(key, 'accuracy', size)] = tf.metrics.accuracy(
-        labels[key], predictions[key])
-    metric_map[expand_key(key, 'precision', size)] = tf.metrics.precision(
-        labels[key], predictions[key])
-    metric_map[expand_key(key, 'recall', size)] = tf.metrics.recall(
-        labels[key], predictions[key])
-    metric_map[expand_key(key, 'true_positives',
-                          size)] = tf.metrics.true_positives(
-                              labels[key], predictions[key])
-    metric_map[expand_key(key, 'false_positives',
-                          size)] = tf.metrics.false_positives(
-                              labels[key], predictions[key])
-    metric_map[expand_key(key, 'false_negatives',
-                          size)] = tf.metrics.false_negatives(
-                              labels[key], predictions[key])
-    metric_map[expand_key(key, 'roc', size)] = tf.metrics.auc(
-        labels[key], predictions[key])
-
-    # these metrics might be meaningless in the windowed case
-    note_precision, note_recall, note_f1 = _note_metrics_op(
-        labels[key], predictions[key], hparams)
-    metric_map[expand_key(key, 'note_precision',
-                          size)] = tf.metrics.mean(note_precision)
-    metric_map[expand_key(key, 'note_recall',
-                          size)] = tf.metrics.mean(note_recall)
-    metric_map[expand_key(key, 'note_f1', size)] = tf.metrics.mean(note_f1)
-
-    note_tuple = _note_metrics_op(labels[key], predictions[key], hparams, .2)
-    note_precision_with_offsets = note_tuple[0]
-    note_recall_with_offsets = note_tuple[1]
-    note_f1_with_offsets = note_tuple[2]
-    metric_map[expand_key(key, 'note_precision_with_offsets',
-                          size)] = tf.metrics.mean(note_precision_with_offsets)
-    metric_map[expand_key(key, 'note_recall_with_offsets',
-                          size)] = tf.metrics.mean(note_recall_with_offsets)
-    metric_map[expand_key(key, 'note_f1_with_offsets',
-                          size)] = tf.metrics.mean(note_f1_with_offsets)
-
-    try:
-      onset_labels = tf.get_default_graph().get_tensor_by_name(
-          'onsets/onset_labels_flat:0')
-      onset_predictions = tf.get_default_graph().get_tensor_by_name(
-          'onsets/onset_predictions_flat:0')
-      onset_note_precision, onset_note_recall, onset_note_f1 = _note_metrics_op(
-          onset_labels, onset_predictions, hparams)
-      metric_map[expand_key(key, 'onset_note_precision',
-                            size)] = tf.metrics.mean(onset_note_precision)
-      metric_map[expand_key(key, 'onset_note_recall',
-                            size)] = tf.metrics.mean(onset_note_recall)
-      metric_map[expand_key(key, 'onset_note_f1',
-                            size)] = tf.metrics.mean(onset_note_f1)
-    except KeyError:
-      # no big deal if we can't find the tensors
-      pass
-
-  # Create a local variable to store the last batch of images.
-  for image_name, image in images.items():
-    var_name = image_prefix + image_name
-    with tf.variable_scope(image_name, values=[image]):
-      local_image = tf.Variable(
-          initial_value=tf.zeros(
-              [1 if d is None else d for d in image.shape.as_list()],
-              image.dtype),
-          name=var_name,
-          trainable=False,
-          collections=[tf.GraphKeys.LOCAL_VARIABLES],
-          validate_shape=False)
-    metric_map[var_name] = (
-        local_image, tf.assign(local_image, image, validate_shape=False))
-
-  # Calculate streaming means for each of the losses.
-  loss_labels = []
-  for label, loss_collection in losses.items():
-    loss_label = 'losses/' + label
-    loss_labels.append(loss_label)
-    metric_map[loss_label] = tf.metrics.mean(loss_collection)
-
-  metrics_to_values, metrics_to_updates = (
-      tf.contrib.metrics.aggregate_metric_map(metric_map))
-
-  for metric_name, metric_value in metrics_to_values.items():
-    if metric_name.startswith(image_prefix):
-      tf.summary.image(metric_name[len(image_prefix):], metric_value)
-    else:
-      tf.summary.scalar(metric_name, metric_value)
-
-  # Calculate total loss metric by adding up all the individual loss means.
-  total_loss = tf.add_n([metrics_to_values[l] for l in loss_labels])
-  metrics_to_values['loss'] = total_loss
-  tf.summary.scalar('loss', total_loss)
-
-  for key in labels.keys():
-    # Calculate F1 Score based on precision and recall.
-    precision = metrics_to_values[expand_key(key, 'precision', size)]
-    recall = metrics_to_values[expand_key(key, 'recall', size)]
-
-    f1_score = tf.where(
-        tf.greater(precision + recall, 0),
-        2 * ((precision * recall) / (precision + recall)), 0)
-    metrics_to_values[expand_key(key, 'f1_score', size)] = f1_score
-    tf.summary.scalar(expand_key(key, 'f1_score', size), f1_score)
-
-    # Calculate accuracy without true negatives.
-    true_positives = metrics_to_values[expand_key(key, 'true_positives', size)]
-    false_positives = metrics_to_values[expand_key(key, 'false_positives',
-                                                   size)]
-    false_negatives = metrics_to_values[expand_key(key, 'false_negatives',
-                                                   size)]
-    accuracy_without_true_negatives = tf.where(
-        tf.greater(true_positives + false_positives + false_negatives,
-                   0), true_positives /
-        (true_positives + false_positives + false_negatives), 0)
-    metrics_to_values[expand_key(key, 'accuracy_without_true_negatives',
-                                 size)] = (accuracy_without_true_negatives)
-    tf.summary.scalar(
-        expand_key(key, 'accuracy_without_true_negatives', size),
-        accuracy_without_true_negatives)
-
-  return metrics_to_values, metrics_to_updates
+  checkpoint_path = None
+  while True:
+    checkpoint_path = tf_head.contrib.training.wait_for_new_checkpoint(
+        model_dir, last_checkpoint=checkpoint_path)
+    estimator.evaluate(input_fn=transcription_data, steps=num_steps, name=name)
